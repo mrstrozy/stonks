@@ -2,6 +2,7 @@
 
 
 import yfinance
+import pandas
 from argparse           import ArgumentParser
 from concurrent.futures import ThreadPoolExecutor
 from csv                import DictReader
@@ -11,8 +12,8 @@ class Ticker:
     def __init__(self,
                  symbol: str,
                  ):
-        print(symbol)
-        self.ticker = yfinance.Ticker(symbol)
+        self.ticker  = yfinance.Ticker(symbol)
+        self.history = None
     
     def __str__(self,
                 ):
@@ -23,64 +24,60 @@ class Ticker:
         return self.ticker.history()['Close'][-1]
     
     def get_daily_history(self,
-                          days_ago: None,
+                          period='1mo',
                           ):
-        return self.get_history(days_ago=days_ago, interval='1d')
+        return self.get_history(interval='1d', period=period, refresh=True)
     
     def get_fifty_percent_level(self,
                                 interval='wk',
                                 ):
         
+        if interval == 'mo':
+            func = self.get_monthly_history
         if interval == 'wk':
-            data = self.get_weekly_history(weeks_ago=1)
+            func = self.get_weekly_history
         else:
-            data = self.get_daily_history()
+            func = self.get_daily_history
+
+        data = func()
 
         if len(data) < 2:
             return 0
 
-        wk = data.get(list(data.keys())[0])
-        return wk.get('Low') + (wk.get('High') - wk.get('Low'))/2
-
+        return data['Low'][-2] + (data['High'][-2] - data['Low'][-2])/2
 
     def get_history(self,
-                    days_ago:      int  = None,
-                    ensure_weekly: bool = False,
-                    interval:      str  = '1d',
+                    interval: str  = '1d',
+                    period:   str  = '1mo',
+                    refresh:  bool = False,
                     ):
-        data = {}
-        try:
-            history = self.ticker.history(interval=interval)
-        except Exception as e:
-            msg = f'Err when fetching history for {self}'
-            print(msg)
-            return data
-        
+        if self.history is None or refresh:
+            try:
+                self.history = self.ticker.history(interval=interval, period=period)
+            except Exception as e:
+                msg = f'Err when fetching history for {self}'
+                print(msg)
+        return self.history
 
-        for category, datadict in history.items():
-            for timestamp, metric in datadict.items():
-                if any([
-                    # weekly metric
-                    ensure_weekly and timestamp.weekday() != 0,
-                    # not within the day window
-                    days_ago and (timestamp.now() - timestamp).days // days_ago != 0, 
-                ]):
-                    continue
+    def get_monthly_history(self,
+                            period='6mo',
+                            ):
+        history = self.get_history(interval='1mo',
+                                   period=period,
+                                   refresh=True,
+                                   )
+        for date in list(history.index.values): # leave the last entry
+            if pandas.to_datetime(date).day != 1:
+                history = history.drop(date)
 
-                if timestamp in data:
-                    data[timestamp][category] = metric
-                else:
-                    data[timestamp] = {category: metric}
-        
-        return data
+        return history
 
     def get_weekly_history(self,
-                           weeks_ago: int = None,
+                           period='2wk',
                            ):
-        days_ago = (7*(weeks_ago+1))-1 if weeks_ago else None
-        return self.get_history(days_ago=days_ago,
-                                ensure_weekly=True,
-                                interval='1wk',
+        return self.get_history(interval='1wk',
+                                period=period,
+                                refresh=True,
                                 )
     
     def is_in_fifty_percent_rule(self,
@@ -88,20 +85,25 @@ class Ticker:
         level = self.get_fifty_percent_level(interval=interval)
 
         if level:
-            cur_price    = self.get_current_price()
+            try:
+                cur_price    = self.get_current_price()
+            except Exception as e:
+                return False
             week_history = self.get_weekly_history(weeks_ago=1)
-            last_week    = week_history[list(week_history)[0]]
-            this_week    = week_history[list(week_history)[1]]
-            last_week_low  = last_week.get('Low')
-            last_week_high = last_week.get('High')
-            this_week_low  = this_week.get('Low')
-            this_week_high = this_week.get('High')
+            print(f'{self} - {len(week_history)}')
+            if len(week_history) > 1:
+                last_week    = week_history[list(week_history)[0]]
+                this_week    = week_history[list(week_history)[1]]
+                last_week_low  = last_week.get('Low')
+                last_week_high = last_week.get('High')
+                this_week_low  = this_week.get('Low')
+                this_week_high = this_week.get('High')
 
-            if any([
-                this_week_low < last_week_low and cur_price > level,
-                this_week_high > last_week_high and cur_price < level,
-            ]):
-                return True
+                if any([
+                    this_week_low < last_week_low and cur_price > level,
+                    this_week_high > last_week_high and cur_price < level,
+                ]):
+                    return True
         return False
 
 def parse_args():
