@@ -18,6 +18,19 @@ class Ticker:
     def __str__(self,
                 ):
         return self.ticker.ticker
+
+    def _history_func_map(self,
+                  interval: str,
+                  ):
+        if interval == 'mo':
+            func = self.get_monthly_history
+        elif interval == 'wk':
+            func = self.get_weekly_history
+        elif interval == 'd':
+            func = self.get_daily_history
+        else:
+            raise Exception(f'{interval} not a valid interval')
+        return func
     
     def get_current_price(self,
                           ):
@@ -34,7 +47,7 @@ class Ticker:
         
         if interval == 'mo':
             func = self.get_monthly_history
-        if interval == 'wk':
+        elif interval == 'wk':
             func = self.get_weekly_history
         else:
             func = self.get_daily_history
@@ -66,7 +79,7 @@ class Ticker:
                                    period=period,
                                    refresh=True,
                                    )
-        for date in list(history.index.values): # leave the last entry
+        for date in list(history.index.values):
             if pandas.to_datetime(date).day != 1:
                 history = history.drop(date)
 
@@ -75,33 +88,32 @@ class Ticker:
     def get_weekly_history(self,
                            period='2wk',
                            ):
-        return self.get_history(interval='1wk',
-                                period=period,
-                                refresh=True,
-                                )
+        history = self.get_history(interval='1wk',
+                                   period=period,
+                                   refresh=True,
+                                   )
+        for date in list(history.index.values):
+            if pandas.to_datetime(date).day_of_week != 0:
+                history = history.drop(date)
+
+        return history
+
     
     def is_in_fifty_percent_rule(self,
                                  interval: str = 'wk'):
         level = self.get_fifty_percent_level(interval=interval)
 
         if level:
-            try:
-                cur_price    = self.get_current_price()
-            except Exception as e:
-                return False
-            week_history = self.get_weekly_history(weeks_ago=1)
-            print(f'{self} - {len(week_history)}')
-            if len(week_history) > 1:
-                last_week    = week_history[list(week_history)[0]]
-                this_week    = week_history[list(week_history)[1]]
-                last_week_low  = last_week.get('Low')
-                last_week_high = last_week.get('High')
-                this_week_low  = this_week.get('Low')
-                this_week_high = this_week.get('High')
+            history = self._history_func_map(interval)()
+            if len(history) > 1:
+                last_low  = history['Low'][-2]
+                last_high = history['High'][-2]
+                this_low  = history['Low'][-1]
+                this_high = history['High'][-1]
 
                 if any([
-                    this_week_low < last_week_low and cur_price > level,
-                    this_week_high > last_week_high and cur_price < level,
+                    this_low < last_low and this_high > level,
+                    this_high > last_high and this_low < level,
                 ]):
                     return True
         return False
@@ -133,13 +145,25 @@ def main():
     # fp = [t for t in tickers[:200] if Ticker(t).is_in_fifty_percent_rule()]
     # print(fp)
     with ThreadPoolExecutor() as executor:
-        data = {
+        weekly_data = {
             t: executor.submit(Ticker(t).is_in_fifty_percent_rule)
             for t in tickers
         }
+        monthly_data = {
+            t: executor.submit(Ticker(t).is_in_fifty_percent_rule, interval='mo')
+            for t in tickers
+        }
     
-    data = {k: v.result() for k, v in data.items() if v.result()}
-    print(data)
+    weekly_data = {k: v.result() for k, v in weekly_data.items() if v.result()}
+    monthly_data = {k: v.result() for k, v in monthly_data.items() if v.result()}
+    both = list(set(weekly_data.keys()) & set(monthly_data.keys()))
+
+
+    output = ''
+    output += 'Weekly:\n  ' + '\n  '.join(weekly_data.keys())
+    output += '\nMonthly:\n  ' + '\n  '.join(monthly_data.keys())
+    output += '\nBoth:\n  ' + '\n  '.join(both)
+    print(output)
     
     
 
