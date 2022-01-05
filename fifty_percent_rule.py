@@ -1,29 +1,35 @@
 #!/usr/bin/env python3
 
 
-import yfinance
+import yfinance 
 import pandas
 import numpy
 import operator
 from argparse           import ArgumentParser
 from concurrent.futures import ThreadPoolExecutor
 from csv                import DictReader
-from datetime           import date
+from datetime           import date, datetime, timedelta
+from finnhub            import Client
+
+
+API_KEY = 'c75143qad3id2vkrk6tg'
 
 class Ticker:
     def __init__(self,
                  symbol: str,
                  ):
-        self.ticker  = yfinance.Ticker(symbol)
+        self.api_key = API_KEY
+        self.client  = Client(api_key=self.api_key)
+        self.ticker  = symbol
         self.history = None
     
     def __str__(self,
                 ):
-        return self.ticker.ticker
+        return self.ticker
 
     def _history_func_map(self,
-                  interval: str,
-                  ):
+                          interval: str,
+                          ):
         if interval == 'mo':
             func = self.get_monthly_history
         elif interval == 'wk':
@@ -65,15 +71,20 @@ class Ticker:
         return data['Low'][-2] + (data['High'][-2] - data['Low'][-2])/2
 
     def get_history(self,
-                    interval: str  = '1d',
-                    period:   str  = '1mo',
-                    refresh:  bool = False,
+                    interval='D',
+                    start=(datetime.now() - timedelta(weeks=5)).strftime('%s'),
+                    end=datetime.now().strftime('%s'),
+                    refresh=False,
                     ):
         if self.history is None or refresh:
             try:
-                self.history = self.ticker.history(interval=interval, period=period)
+                self.history = self.client.stock_candles(self.ticker,
+                                                         resolution=interval,
+                                                         _from=start,
+                                                         to=end,
+                                                         )
             except Exception as e:
-                msg = f'Err when fetching history for {self}'
+                msg = f'Err when fetching history for {self} - {e}'
                 print(msg)
         return self.history
 
@@ -158,9 +169,13 @@ class Ticker:
         in_fifty_percent_rule = False
 
         if len(history) > 1:
-            prev_high = history['High'][-2]
-            prev_low  = history['Low'][-2]
-            first_open = day_history['Open'][0]
+            try:
+                print(history)
+                prev_high = history['High'][-2]
+                prev_low  = history['Low'][-2]
+                first_open = day_history['Open'][0]
+            except Exception as e:
+                return direction
 
             if first_open < level: # Set our generic operators/vars
                 first_metric_key = 'Low'
@@ -181,17 +196,21 @@ class Ticker:
 
             crossed = False
 
+
             for day, metrics in day_history.iterrows():
                 first_metric = metrics[first_metric_key]
                 second_metric = metrics[second_metric_key]
                 if not crossed:
                     if first_op(first_metric, first_level):
+                        # print(f'{self} - {first_metric} {first_op} {first_level}')
                         crossed = True
                     elif second_op(second_metric, level):
                         direction = ''
                         break
                 else:
                     if second_op(second_metric, level):
+                        # print(f'{self} - {second_metric} {second_op} {level}')
+                        # print(f'{self} - {level} - {day_history}')
                         in_fifty_percent_rule = True
                         break
             else:
@@ -243,7 +262,6 @@ def main():
     both = list(set(weekly_data.keys()) & set(monthly_data.keys()))
     both_direction = list(set(weekly_and_direction) & set(monthly_and_direction))
 
-
     output = ''
     output += 'Weekly:\n  ' + '\n  '.join(weekly_data.keys())
     output += '\nMonthly:\n  ' + '\n  '.join(monthly_data.keys())
@@ -252,7 +270,5 @@ def main():
     print(output)
     
     
-
-
 if __name__ == '__main__':
     main()
